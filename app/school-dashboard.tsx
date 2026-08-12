@@ -177,7 +177,10 @@ export function SchoolDashboard() {
   }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${loading ? "is-refreshing" : ""}`} aria-busy={loading}>
+      <div className={`load-progress ${loading ? "visible" : ""}`} role="status" aria-live="polite">
+        <i /><span>{loading ? `Loading ${year} School Quality Reports…` : "Data updated"}</span>
+      </div>
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark">M</span><span>MDG <strong>School Lens</strong></span></div>
         <nav aria-label="Primary navigation">
@@ -198,18 +201,18 @@ export function SchoolDashboard() {
           <div><p className="eyebrow">Executive overview</p><h1>School system pulse</h1></div>
           <div className="controls">
             <label>Reporting year
-              <select value={year} onChange={(event) => setYear(event.target.value)} aria-label="Reporting year">
+              <select value={year} onChange={(event) => setYear(event.target.value)} aria-label="Reporting year" disabled={loading}>
                 {(years.length ? years : [{ report_year: "2025", schools: "", records: "" }]).map((item) => <option key={item.report_year}>{item.report_year}</option>)}
               </select>
             </label>
-            <button onClick={() => window.location.reload()} aria-label="Refresh live data">↻ Refresh</button>
+            <button onClick={() => window.location.reload()} aria-label="Refresh live data" disabled={loading}>↻ Refresh</button>
           </div>
         </header>
 
         <section className="status-strip" id="health">
-          <span className={error ? "status-dot warning" : "status-dot"} />
-          <strong>{error ? "Connection needs attention" : "Live source connected"}</strong>
-          <span>{error || `Latest successful refresh ${updated ? updated.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "in progress"}`}</span>
+          <span className={error ? "status-dot warning" : loading ? "status-dot loading" : "status-dot"} />
+          <strong>{error ? "Connection needs attention" : loading ? `Loading ${year} reports` : "Live source connected"}</strong>
+          <span>{error || (loading ? "Keeping the current view visible while new data arrives…" : `Latest successful refresh ${updated ? updated.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "in progress"}`)}</span>
           <span className="source">NYC Open Data · dnpx-dfnc</span>
         </section>
 
@@ -219,10 +222,10 @@ export function SchoolDashboard() {
         </section>
 
         <section className="kpi-grid" aria-label="Key indicators">
-          <article><span className="kpi-icon blue">▦</span><div><p>Schools represented</p><strong>{loading ? "—" : Number(current?.schools || 0).toLocaleString()}</strong><small>Distinct school DBNs</small></div></article>
+          <article><span className="kpi-icon blue">▦</span><div><p>Schools represented</p><strong className={loading ? "skeleton-value" : ""}>{loading ? "000" : Number(current?.schools || 0).toLocaleString()}</strong><small>Distinct school DBNs</small></div></article>
           <article><span className="kpi-icon green">✓</span><div><p>Average attendance</p><strong>{attendance === null ? "—" : `${(attendance * 100).toFixed(1)}%`}</strong><small>Across reported schools</small></div></article>
           <article><span className="kpi-icon amber">↗</span><div><p>Students above 90%</p><strong>{strongAttendance === null ? "—" : `${(strongAttendance * 100).toFixed(1)}%`}</strong><small>Attendance threshold</small></div></article>
-          <article><span className="kpi-icon violet">●</span><div><p>Published records</p><strong>{loading ? "—" : compact(Number(current?.records || 0))}</strong><small>Metric observations</small></div></article>
+          <article><span className="kpi-icon violet">●</span><div><p>Published records</p><strong className={loading ? "skeleton-value" : ""}>{loading ? "000K" : compact(Number(current?.records || 0))}</strong><small>Metric observations</small></div></article>
         </section>
 
         <section className="content-grid">
@@ -252,7 +255,7 @@ export function SchoolDashboard() {
           <div className="profile-title district-title">
             <div><p className="eyebrow">Geographic intelligence</p><h2>District Explorer</h2><p>Review district coverage, attendance context, school mix, and schools that warrant a closer look.</p></div>
             <label className="district-select">Community school district
-              <select value={selectedDistrict} onChange={(event) => setSelectedDistrict(event.target.value)} aria-label="Community school district">
+              <select value={selectedDistrict} onChange={(event) => setSelectedDistrict(event.target.value)} aria-label="Community school district" disabled={loading}>
                 {districts.map((district) => <option value={district} key={district}>District {Number(district)} — {DISTRICT_LABELS[district]}</option>)}
               </select>
             </label>
@@ -294,7 +297,7 @@ export function SchoolDashboard() {
           </div>
           <div className="compare-selectors">
             {([0, 1] as const).map((position) => <label key={position}>School {position + 1}
-              <select value={compareDbns[position]} onChange={(event) => setCompareDbns((current) => position === 0 ? [event.target.value, current[1]] : [current[0], event.target.value])}>
+              <select value={compareDbns[position]} disabled={loading || comparisonLoading} onChange={(event) => setCompareDbns((current) => position === 0 ? [event.target.value, current[1]] : [current[0], event.target.value])}>
                 {schools.map((school) => <option value={school.dbn} key={`${position}-${school.dbn}`}>{school.school_name} · {school.dbn}</option>)}
               </select>
             </label>)}
