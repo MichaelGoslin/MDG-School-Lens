@@ -294,7 +294,7 @@ export function SchoolDashboard() {
 
         <section className="kpi-grid" aria-label="Key indicators">
           <article><span className="kpi-icon blue">▦</span><div><p>Schools represented</p><strong className={loading ? "skeleton-value" : ""}>{loading ? "000" : Number(current?.schools || 0).toLocaleString()}</strong><small>Distinct school DBNs</small></div></article>
-          <article><span className="kpi-icon green">✓</span><div><p>Average attendance</p><strong>{attendance === null ? "—" : `${(attendance * 100).toFixed(1)}%`}</strong><small>Across reported schools</small></div></article>
+          <article><span className="kpi-icon green">✓</span><div><p>{attendanceMeasure === "average" ? "Average attendance" : "90%+ attendance rate"}</p><strong>{citywideAttendanceMeasure === null ? "Not reported" : `${(citywideAttendanceMeasure * 100).toFixed(1)}%`}</strong><small>{attendanceMeasure === "average" ? "Across reported schools" : "Historical attendance indicator"}</small></div></article>
           <article><span className="kpi-icon amber">↗</span><div><p>Students above 90%</p><strong>{strongAttendance === null ? "—" : `${(strongAttendance * 100).toFixed(1)}%`}</strong><small>Attendance threshold</small></div></article>
           <article><span className="kpi-icon violet">●</span><div><p>Published records</p><strong className={loading ? "skeleton-value" : ""}>{loading ? "000K" : compact(Number(current?.records || 0))}</strong><small>Metric observations</small></div></article>
         </section>
