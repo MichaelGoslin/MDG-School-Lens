@@ -7,6 +7,8 @@ const API = "https://data.cityofnewyork.us/resource/dnpx-dfnc.json";
 type YearRow = { report_year: string; schools: string; records: string };
 type TypeRow = { school_type: string; schools: string };
 type MetricRow = { metric_variable_name: string; metric_display_name: string; metric_value: string };
+type SchoolRow = { dbn: string; school_name: string; school_type: string };
+type ProfileRow = MetricRow & { report_year: string; comparison_group_average?: string; number_of_students?: string };
 
 function query(params: Record<string, string>) {
   const qs = new URLSearchParams(params);
@@ -30,6 +32,11 @@ export function SchoolDashboard() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [updated, setUpdated] = useState<Date | null>(null);
+  const [schools, setSchools] = useState<SchoolRow[]>([]);
+  const [schoolSearch, setSchoolSearch] = useState("");
+  const [selectedDbn, setSelectedDbn] = useState("");
+  const [profile, setProfile] = useState<ProfileRow[]>([]);
+  const [profileLoading, setProfileLoading] = useState(false);
 
   useEffect(() => {
     query({
@@ -53,18 +60,50 @@ export function SchoolDashboard() {
         "$where": `${where} and metric_variable_name in('attendance_hs_all','attendance_k3_all','attendance_k8_all','chronic_absent_all','chronic_absent_ems_all','chronic_absent_hs_all')`,
         "$limit": "5000",
       }),
-    ]).then(([typeData, metricData]) => {
+      query({ "$select": "dbn,school_name,school_type", "$where": where, "$group": "dbn,school_name,school_type", "$order": "school_name", "$limit": "5000" }),
+    ]).then(([typeData, metricData, schoolData]) => {
       setTypes(typeData as TypeRow[]);
       setMetrics(metricData as MetricRow[]);
+      const availableSchools = schoolData as SchoolRow[];
+      setSchools(availableSchools);
+      if (!selectedDbn || !availableSchools.some((school) => school.dbn === selectedDbn)) {
+        setSelectedDbn(availableSchools[0]?.dbn || "");
+        setSchoolSearch(availableSchools[0] ? `${availableSchools[0].school_name} · ${availableSchools[0].dbn}` : "");
+      }
       setUpdated(new Date());
     }).catch(() => setError("NYC Open Data is temporarily unavailable. Try refreshing shortly."))
       .finally(() => setLoading(false));
-  }, [year]);
+  }, [year, selectedDbn]);
+
+  useEffect(() => {
+    if (!selectedDbn) return;
+    setProfileLoading(true);
+    const variables = "'attendance_hs_all','attendance_k3_all','attendance_k8_all','chronic_absent_all','chronic_absent_ems_all','chronic_absent_hs_all'";
+    query({
+      "$select": "report_year,metric_variable_name,metric_display_name,metric_value,comparison_group_average,number_of_students",
+      "$where": `dbn='${selectedDbn}' and metric_variable_name in(${variables})`,
+      "$order": "report_year",
+      "$limit": "500",
+    }).then((data: ProfileRow[]) => setProfile(data)).catch(() => setProfile([])).finally(() => setProfileLoading(false));
+  }, [selectedDbn]);
 
   const current = years.find((item) => item.report_year === year);
   const attendance = useMemo(() => percent(metrics, ["attendance_hs_all", "attendance_k3_all", "attendance_k8_all"]), [metrics]);
   const strongAttendance = useMemo(() => percent(metrics, ["chronic_absent_all", "chronic_absent_ems_all", "chronic_absent_hs_all"]), [metrics]);
   const maxSchools = Math.max(...types.map((item) => Number(item.schools)), 1);
+  const selectedSchool = schools.find((school) => school.dbn === selectedDbn);
+  const schoolOptions = useMemo(() => schools.filter((school) => `${school.school_name} ${school.dbn}`.toLowerCase().includes(schoolSearch.toLowerCase().split(" · ")[0])).slice(0, 8), [schools, schoolSearch]);
+  const attendanceTrend = useMemo(() => {
+    const attendanceNames = ["attendance_hs_all", "attendance_k3_all", "attendance_k8_all"];
+    return years.slice().reverse().map((item) => {
+      const rows = profile.filter((row) => row.report_year === item.report_year && attendanceNames.includes(row.metric_variable_name));
+      const value = rows.length ? Number(rows[0].metric_value) : null;
+      return { year: item.report_year, value: value !== null && Number.isFinite(value) ? value : null };
+    }).filter((item) => item.value !== null);
+  }, [profile, years]);
+  const latestAttendance = attendanceTrend.find((item) => item.year === year)?.value ?? attendanceTrend.at(-1)?.value ?? null;
+  const latestProfileRow = profile.find((row) => row.report_year === year && ["attendance_hs_all", "attendance_k3_all", "attendance_k8_all"].includes(row.metric_variable_name));
+  const peerAttendance = latestProfileRow?.comparison_group_average ? Number(latestProfileRow.comparison_group_average) : null;
 
   return (
     <div className="app-shell">
@@ -142,6 +181,42 @@ export function SchoolDashboard() {
           <div className="panel-head"><div><p className="eyebrow">Data history</p><h3>Coverage by report year</h3></div><span>{years.length} reporting years available</span></div>
           <div className="year-cards">
             {years.slice(0, 6).reverse().map((item) => <button key={item.report_year} onClick={() => setYear(item.report_year)} className={year === item.report_year ? "selected" : ""}><strong>{item.report_year}</strong><span>{Number(item.schools).toLocaleString()} schools</span></button>)}
+          </div>
+        </section>
+
+        <section className="profile-section" id="profiles">
+          <div className="profile-title">
+            <div><p className="eyebrow">School intelligence</p><h2>School profile</h2><p>Find a school and review its multi-year attendance signal against the official peer group.</p></div>
+            <div className="school-finder">
+              <label htmlFor="school-search">Search by school name or DBN</label>
+              <input id="school-search" value={schoolSearch} onChange={(event) => setSchoolSearch(event.target.value)} placeholder="Start typing a school name…" autoComplete="off" />
+              {schoolSearch && !schoolSearch.includes(" · ") && schoolOptions.length > 0 && <div className="school-results">
+                {schoolOptions.map((school) => <button key={school.dbn} onClick={() => { setSelectedDbn(school.dbn); setSchoolSearch(`${school.school_name} · ${school.dbn}`); }}><strong>{school.school_name}</strong><span>{school.dbn} · {school.school_type}</span></button>)}
+              </div>}
+            </div>
+          </div>
+
+          <div className="school-identity">
+            <span className="school-badge">{selectedSchool?.dbn.slice(-3) || "NYC"}</span>
+            <div><h3>{selectedSchool?.school_name || (profileLoading ? "Loading school profile…" : "Select a school")}</h3><p>{selectedSchool?.dbn} {selectedSchool?.school_type ? `· ${selectedSchool.school_type}` : ""}</p></div>
+            <span className="profile-year">Latest view · {year}</span>
+          </div>
+
+          <div className="profile-grid">
+            <article className="panel trend-panel">
+              <div className="panel-head"><div><p className="eyebrow">Longitudinal view</p><h3>Average student attendance</h3></div><span>{attendanceTrend.length} years reported</span></div>
+              {profileLoading ? <p className="muted">Loading school history…</p> : attendanceTrend.length ? <div className="trend-chart" aria-label="Attendance trend by year">
+                {attendanceTrend.map((point) => <div className="trend-column" key={point.year} title={`${point.year}: ${((point.value || 0) * 100).toFixed(1)}%`}><span>{((point.value || 0) * 100).toFixed(0)}%</span><div><i style={{ height: `${Math.max(8, ((point.value || 0) - .7) * 300)}%` }} /></div><small>{point.year.slice(-2)}</small></div>)}
+              </div> : <p className="muted">No attendance history is reported for this school.</p>}
+            </article>
+
+            <article className="panel peer-panel">
+              <div className="panel-head"><div><p className="eyebrow">Context matters</p><h3>Peer comparison</h3></div><span>{year}</span></div>
+              <div className="comparison-score"><strong>{latestAttendance === null ? "—" : `${(latestAttendance * 100).toFixed(1)}%`}</strong><span>School attendance</span></div>
+              <div className="peer-line"><span>Comparison group</span><strong>{peerAttendance !== null && Number.isFinite(peerAttendance) ? `${(peerAttendance * 100).toFixed(1)}%` : "Not reported"}</strong></div>
+              <div className="peer-line"><span>Difference</span><strong className={latestAttendance !== null && peerAttendance !== null && latestAttendance >= peerAttendance ? "positive" : "negative"}>{latestAttendance !== null && peerAttendance !== null && Number.isFinite(peerAttendance) ? `${((latestAttendance - peerAttendance) * 100).toFixed(1)} pts` : "—"}</strong></div>
+              <p className="context-note">Use the comparison group as context, not a ranking. School type, population, and reporting coverage can affect interpretation.</p>
+            </article>
           </div>
         </section>
 
