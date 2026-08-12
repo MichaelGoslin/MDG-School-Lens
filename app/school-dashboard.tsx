@@ -58,6 +58,7 @@ export function SchoolDashboard() {
   const [comparisonProfiles, setComparisonProfiles] = useState<Record<string, ProfileRow[]>>({});
   const [comparisonLoading, setComparisonLoading] = useState(false);
   const [selectedOutcome, setSelectedOutcome] = useState<(typeof OUTCOME_METRICS)[number]["key"]>("attendance");
+  const [briefingMode, setBriefingMode] = useState<"district" | "comparison" | "profile">("comparison");
 
   useEffect(() => {
     query({
@@ -180,6 +181,20 @@ export function SchoolDashboard() {
     window.setTimeout(() => document.getElementById("profiles")?.scrollIntoView({ behavior: "smooth" }), 50);
   }
 
+  function printBriefing(mode: "district" | "comparison" | "profile") {
+    setBriefingMode(mode);
+    window.setTimeout(() => window.print(), 80);
+  }
+
+  function briefingSnapshot(rows: ProfileRow[], metric: (typeof OUTCOME_METRICS)[number]) {
+    const relevant = rows.filter((row) => metric.variables.includes(row.metric_variable_name as never));
+    const latest = relevant.find((row) => row.report_year === year) || relevant.at(-1);
+    const value = latest && Number.isFinite(Number(latest.metric_value)) ? Number(latest.metric_value) : null;
+    const peer = latest?.comparison_group_average && Number.isFinite(Number(latest.comparison_group_average)) ? Number(latest.comparison_group_average) : null;
+    const values = years.slice().reverse().map((item) => relevant.find((row) => row.report_year === item.report_year)).filter(Boolean).map((row) => Number(row?.metric_value)).filter(Number.isFinite);
+    return { value, peer, signal: buildSignal(values, value, peer, metric.short) };
+  }
+
   return (
     <div className={`app-shell ${loading ? "is-refreshing" : ""}`} aria-busy={loading}>
       <div className={`load-progress ${loading ? "visible" : ""}`} role="status" aria-live="polite">
@@ -257,7 +272,7 @@ export function SchoolDashboard() {
 
         <section className="district-section" id="districts">
           <div className="profile-title district-title">
-            <div><p className="eyebrow">Geographic intelligence</p><h2>District Explorer</h2><p>Review district coverage, attendance context, school mix, and schools that warrant a closer look.</p></div>
+            <div><p className="eyebrow">Geographic intelligence</p><h2>District Explorer</h2><p>Review district coverage, attendance context, school mix, and schools that warrant a closer look.</p><button className="export-button" onClick={() => printBriefing("district")}>⇩ Export district briefing</button></div>
             <label className="district-select">Community school district
               <select value={selectedDistrict} onChange={(event) => setSelectedDistrict(event.target.value)} aria-label="Community school district" disabled={loading}>
                 {districts.map((district) => <option value={district} key={district}>District {Number(district)} — {DISTRICT_LABELS[district]}</option>)}
@@ -298,7 +313,7 @@ export function SchoolDashboard() {
 
         <section className="compare-section" id="compare">
           <div className="profile-title">
-            <div><p className="eyebrow">Side-by-side intelligence</p><h2>School Comparison</h2><p>Compare two schools across attendance, peer context, coverage, and reporting history.</p></div>
+            <div><p className="eyebrow">Side-by-side intelligence</p><h2>School Comparison</h2><p>Compare two schools across attendance, peer context, coverage, and reporting history.</p><button className="export-button" onClick={() => printBriefing("comparison")}>⇩ Export comparison briefing</button></div>
           </div>
           <div className="compare-selectors">
             {([0, 1] as const).map((position) => <label key={position}>School {position + 1}
@@ -343,7 +358,7 @@ export function SchoolDashboard() {
 
         <section className="profile-section" id="profiles">
           <div className="profile-title">
-            <div><p className="eyebrow">School intelligence</p><h2>School profile</h2><p>Find a school and review its multi-year attendance signal against the official peer group.</p></div>
+            <div><p className="eyebrow">School intelligence</p><h2>School profile</h2><p>Find a school and review its multi-year attendance signal against the official peer group.</p><button className="export-button" onClick={() => printBriefing("profile")}>⇩ Export school briefing</button></div>
             <div className="school-finder">
               <label htmlFor="school-search">Search by school name or DBN</label>
               <input id="school-search" value={schoolSearch} onChange={(event) => setSchoolSearch(event.target.value)} placeholder="Start typing a school name…" autoComplete="off" />
@@ -384,6 +399,26 @@ export function SchoolDashboard() {
 
         <footer><span>MDG School Lens</span><span>Source: NYC School Quality Reports Data</span></footer>
       </main>
+
+      <section className="briefing-sheet" aria-hidden="true">
+        <header><div><span className="briefing-mark">M</span><div><strong>MDG School Lens</strong><small>Leadership Briefing</small></div></div><p>Report year {year}<br />Prepared {new Date().toLocaleDateString()}</p></header>
+        {briefingMode === "district" && <>
+          <div className="briefing-heading"><p>District briefing</p><h1>Community School District {Number(selectedDistrict)}</h1><span>{DISTRICT_LABELS[selectedDistrict]}</span></div>
+          <div className="briefing-kpis"><div><span>Schools</span><strong>{districtSchools.length}</strong></div><div><span>District attendance</span><strong>{districtAttendance === null ? "—" : `${(districtAttendance * 100).toFixed(1)}%`}</strong></div><div><span>Citywide</span><strong>{attendance === null ? "—" : `${(attendance * 100).toFixed(1)}%`}</strong></div><div><span>Difference</span><strong>{districtAttendance !== null && attendance !== null ? `${((districtAttendance - attendance) * 100).toFixed(1)} pts` : "—"}</strong></div></div>
+          <BriefingSignal signal={districtSignal} />
+          <h2>School configuration</h2><div className="briefing-list">{districtTypeCounts.map((item) => <div key={item.label}><span>{item.label}</span><strong>{item.value} schools</strong></div>)}</div>
+        </>}
+        {briefingMode === "comparison" && <>
+          <div className="briefing-heading"><p>School comparison</p><h1>{comparedSchools.map((school) => school.school_name).join(" vs. ")}</h1><span>Side-by-side outcome context</span></div>
+          <div className="briefing-schools">{comparedSchools.map((school) => <article key={school.dbn}><h2>{school.school_name}</h2><p>{school.dbn} · {school.school_type} · District {Number(school.dbn.slice(0, 2))}</p>{OUTCOME_METRICS.map((metric) => { const result = briefingSnapshot(comparisonProfiles[school.dbn] || [], metric); return <div className="briefing-metric" key={metric.key}><span>{metric.label}</span><strong>{result.value === null ? "Not reported" : `${(result.value * 100).toFixed(1)}%`}</strong><SignalBadge signal={result.signal} /></div>; })}</article>)}</div>
+        </>}
+        {briefingMode === "profile" && <>
+          <div className="briefing-heading"><p>School profile</p><h1>{selectedSchool?.school_name || "Selected school"}</h1><span>{selectedSchool?.dbn} · {selectedSchool?.school_type} · District {Number(selectedSchool?.dbn.slice(0, 2) || 0)}</span></div>
+          <div className="briefing-profile">{OUTCOME_METRICS.map((metric) => { const result = briefingSnapshot(profile, metric); return <article key={metric.key}><span>{metric.label}</span><strong>{result.value === null ? "Not reported" : `${(result.value * 100).toFixed(1)}%`}</strong><small>{result.peer === null ? "Peer not reported" : `Peer group ${(result.peer * 100).toFixed(1)}%`}</small><BriefingSignal signal={result.signal} /></article>; })}</div>
+        </>}
+        <div className="briefing-notes"><strong>Interpretation notes</strong><p>Signals describe individual metrics, not entire schools. Improving indicates a rise of at least 2 points; Needs Review indicates a decline of at least 2 points or a result at least 3 points below peers. Missing values may reflect non-applicable or suppressed data.</p></div>
+        <footer><span>Source: NYC Open Data · School Quality Reports Data · dnpx-dfnc</span><span>mdg-school-lens.michael-goslin.chatgpt.site</span></footer>
+      </section>
     </div>
   );
 }
@@ -408,4 +443,8 @@ function buildSignal(trend: number[], latest: number | null, peer: number | null
 
 function SignalBadge({ signal }: { signal: Signal }) {
   return <span className={`signal-badge ${signal.status}`}><i />{signal.label}</span>;
+}
+
+function BriefingSignal({ signal }: { signal: Signal }) {
+  return <div className={`briefing-signal ${signal.status}`}><strong>{signal.label}</strong><span>{signal.reason}</span></div>;
 }
