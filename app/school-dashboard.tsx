@@ -23,6 +23,7 @@ type MetricRow = { metric_variable_name: string; metric_display_name: string; me
 type SchoolRow = { dbn: string; school_name: string; school_type: string };
 type ProfileRow = MetricRow & { report_year: string; comparison_group_average?: string; number_of_students?: string };
 type DistrictMetricRow = SchoolRow & { metric_value: string };
+type Signal = { status: "improving" | "stable" | "review" | "insufficient"; label: string; reason: string };
 
 function query(params: Record<string, string>) {
   const qs = new URLSearchParams(params);
@@ -149,10 +150,12 @@ export function SchoolDashboard() {
   const latestOutcome = outcomeTrend.find((item) => item.year === year)?.value ?? outcomeTrend.at(-1)?.value ?? null;
   const latestProfileRow = profile.find((row) => row.report_year === year && selectedOutcomeMetric.variables.includes(row.metric_variable_name as never)) || profile.filter((row) => selectedOutcomeMetric.variables.includes(row.metric_variable_name as never)).at(-1);
   const peerOutcome = latestProfileRow?.comparison_group_average ? Number(latestProfileRow.comparison_group_average) : null;
+  const profileSignal = buildSignal(outcomeTrend.map((point) => point.value as number), latestOutcome, peerOutcome, selectedOutcomeMetric.short);
   const districts = useMemo(() => Array.from(new Set(schools.map((school) => school.dbn.slice(0, 2)).filter((district) => /^\d{2}$/.test(district)))).sort(), [schools]);
   const districtSchools = useMemo(() => schools.filter((school) => school.dbn.startsWith(selectedDistrict)), [schools, selectedDistrict]);
   const districtAttendanceRows = useMemo(() => districtMetrics.filter((row) => row.dbn.startsWith(selectedDistrict) && Number.isFinite(Number(row.metric_value))), [districtMetrics, selectedDistrict]);
   const districtAttendance = districtAttendanceRows.length ? districtAttendanceRows.reduce((sum, row) => sum + Number(row.metric_value), 0) / districtAttendanceRows.length : null;
+  const districtSignal = buildSignal([], districtAttendance, attendance, "Attendance");
   const districtTypeCounts = useMemo(() => {
     const counts = new Map<string, number>();
     districtSchools.forEach((school) => counts.set(school.school_type || "Unclassified", (counts.get(school.school_type || "Unclassified") || 0) + 1));
@@ -167,7 +170,8 @@ export function SchoolDashboard() {
     const value = latest && Number.isFinite(Number(latest.metric_value)) ? Number(latest.metric_value) : null;
     const peer = latest?.comparison_group_average && Number.isFinite(Number(latest.comparison_group_average)) ? Number(latest.comparison_group_average) : null;
     const trend = years.slice().reverse().map((item) => ({ year: item.report_year, row: rows.find((row) => row.report_year === item.report_year) })).filter((item) => item.row && Number.isFinite(Number(item.row.metric_value)));
-    return { value, peer, trend, reportedYear: latest?.report_year || "—", students: latest?.number_of_students || "—" };
+    const values = trend.map((item) => Number(item.row?.metric_value));
+    return { value, peer, trend, reportedYear: latest?.report_year || "—", students: latest?.number_of_students || "—", signal: buildSignal(values, value, peer, selectedOutcomeMetric.short) };
   }
 
   function openSchoolProfile(school: SchoolRow) {
@@ -245,9 +249,9 @@ export function SchoolDashboard() {
 
           <article className="panel attention">
             <div className="panel-head"><div><p className="eyebrow">Decision support</p><h3>Administrator focus</h3></div><span className="live-tag">LIVE</span></div>
-            <div className="focus-item"><span>01</span><div><strong>Review attendance context</strong><p>Compare school results with peer groups before escalating support.</p></div></div>
-            <div className="focus-item"><span>02</span><div><strong>Check reporting coverage</strong><p>Missing values may indicate suppression or non-applicable measures.</p></div></div>
-            <div className="focus-item"><span>03</span><div><strong>Move from signal to profile</strong><p>Use the next build to drill into individual schools and trends.</p></div></div>
+            <div className="focus-item"><span>01</span><div><strong>Signals describe metrics</strong><p>Improving, Stable, and Needs Review labels never rate an entire school.</p></div></div>
+            <div className="focus-item"><span>02</span><div><strong>Trend threshold: 2 points</strong><p>Changes of at least two percentage points are treated as meaningful.</p></div></div>
+            <div className="focus-item"><span>03</span><div><strong>Peer gap threshold: 3 points</strong><p>A latest result three or more points below its peer group prompts review.</p></div></div>
           </article>
         </section>
 
@@ -272,6 +276,7 @@ export function SchoolDashboard() {
             <article><p>District difference</p><strong className={districtAttendance !== null && attendance !== null && districtAttendance >= attendance ? "positive" : "negative"}>{districtAttendance !== null && attendance !== null ? `${((districtAttendance - attendance) * 100).toFixed(1)} pts` : "—"}</strong><small>District versus citywide</small></article>
             <article><p>School types</p><strong>{districtTypeCounts.length}</strong><small>Reported configurations</small></article>
           </div>
+          <div className="district-signal"><SignalBadge signal={districtSignal} /><p>{districtSignal.reason}</p></div>
 
           <div className="district-grid">
             <article className="panel">
@@ -311,6 +316,7 @@ export function SchoolDashboard() {
               const snapshot = comparisonSnapshot(school.dbn);
               return <article className={`comparison-card school-${index + 1}`} key={school.dbn}>
                 <div className="comparison-card-head"><span>{school.dbn}</span><div><h3>{school.school_name}</h3><p>{school.school_type} · District {Number(school.dbn.slice(0, 2))}</p></div><button onClick={() => openSchoolProfile(school)}>Open profile</button></div>
+                <div className="card-signal"><SignalBadge signal={snapshot.signal} /><span>{snapshot.signal.reason}</span></div>
                 <div className="comparison-metrics">
                   <div><span>{selectedOutcomeMetric.short}</span><strong>{snapshot.value === null ? "—" : `${(snapshot.value * 100).toFixed(1)}%`}</strong></div>
                   <div><span>Peer group</span><strong>{snapshot.peer === null ? "—" : `${(snapshot.peer * 100).toFixed(1)}%`}</strong></div>
@@ -367,6 +373,7 @@ export function SchoolDashboard() {
 
             <article className="panel peer-panel">
               <div className="panel-head"><div><p className="eyebrow">Context matters</p><h3>Peer comparison</h3></div><span>{year}</span></div>
+              <div className="profile-signal"><SignalBadge signal={profileSignal} /><p>{profileSignal.reason}</p></div>
               <div className="comparison-score"><strong>{latestOutcome === null ? "—" : `${(latestOutcome * 100).toFixed(1)}%`}</strong><span>School {selectedOutcomeMetric.short.toLowerCase()}</span></div>
               <div className="peer-line"><span>Comparison group</span><strong>{peerOutcome !== null && Number.isFinite(peerOutcome) ? `${(peerOutcome * 100).toFixed(1)}%` : "Not reported"}</strong></div>
               <div className="peer-line"><span>Difference</span><strong className={latestOutcome !== null && peerOutcome !== null && latestOutcome >= peerOutcome ? "positive" : "negative"}>{latestOutcome !== null && peerOutcome !== null && Number.isFinite(peerOutcome) ? `${((latestOutcome - peerOutcome) * 100).toFixed(1)} pts` : "—"}</strong></div>
@@ -383,4 +390,22 @@ export function SchoolDashboard() {
 
 function compact(value: number) {
   return new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(value);
+}
+
+function buildSignal(trend: number[], latest: number | null, peer: number | null, metric: string): Signal {
+  const valid = trend.filter(Number.isFinite);
+  const change = valid.length >= 2 ? valid.at(-1)! - valid[0] : null;
+  const gap = latest !== null && peer !== null && Number.isFinite(peer) ? latest - peer : null;
+  if (latest === null || (change === null && gap === null)) return { status: "insufficient", label: "Insufficient Data", reason: `${metric} does not have enough comparable information for a signal.` };
+  if ((change !== null && change <= -.02) || (gap !== null && gap <= -.03)) {
+    const reason = change !== null && change <= -.02 ? `${metric} declined ${Math.abs(change * 100).toFixed(1)} points across the reported trend.` : `${metric} is ${Math.abs((gap || 0) * 100).toFixed(1)} points below the peer group.`;
+    return { status: "review", label: "Needs Review", reason };
+  }
+  if (change !== null && change >= .02) return { status: "improving", label: "Improving", reason: `${metric} improved ${(change * 100).toFixed(1)} points across the reported trend.` };
+  const detail = gap !== null ? `${metric} is within ${Math.abs(gap * 100).toFixed(1)} points of the peer group.` : `${metric} changed less than 2 points across the reported trend.`;
+  return { status: "stable", label: "Stable", reason: detail };
+}
+
+function SignalBadge({ signal }: { signal: Signal }) {
+  return <span className={`signal-badge ${signal.status}`}><i />{signal.label}</span>;
 }
