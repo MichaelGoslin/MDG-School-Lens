@@ -26,6 +26,8 @@ type SchoolRow = { dbn: string; school_name: string; school_type: string };
 type ProfileRow = MetricRow & { report_year: string; comparison_group_average?: string; number_of_students?: string };
 type DistrictMetricRow = SchoolRow & { metric_variable_name: string; metric_value: string };
 type Signal = { status: "improving" | "stable" | "review" | "insufficient"; label: string; reason: string };
+type WatchPriority = "high" | "medium" | "monitor";
+type WatchItem = SchoolRow & { priority: WatchPriority; note: string; metric: string; signal: string; addedAt: string; reportYear: string };
 
 function query(params: Record<string, string>) {
   const qs = new URLSearchParams(params);
@@ -60,7 +62,24 @@ export function SchoolDashboard() {
   const [comparisonProfiles, setComparisonProfiles] = useState<Record<string, ProfileRow[]>>({});
   const [comparisonLoading, setComparisonLoading] = useState(false);
   const [selectedOutcome, setSelectedOutcome] = useState<(typeof OUTCOME_METRICS)[number]["key"]>("attendance");
-  const [briefingMode, setBriefingMode] = useState<"district" | "comparison" | "profile">("comparison");
+  const [briefingMode, setBriefingMode] = useState<"district" | "comparison" | "profile" | "watchlist">("comparison");
+  const [watchlist, setWatchlist] = useState<WatchItem[]>([]);
+  const [watchlistReady, setWatchlistReady] = useState(false);
+  const [watchPriority, setWatchPriority] = useState<"all" | WatchPriority>("all");
+  const [watchDistrict, setWatchDistrict] = useState("all");
+
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem("mdg-school-lens-watchlist");
+      if (saved) setWatchlist(JSON.parse(saved));
+    } catch { /* Keep the watchlist available even if browser storage is unavailable. */ }
+    setWatchlistReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!watchlistReady) return;
+    try { window.localStorage.setItem("mdg-school-lens-watchlist", JSON.stringify(watchlist)); } catch { /* Device storage is optional. */ }
+  }, [watchlist, watchlistReady]);
 
   useEffect(() => {
     query({
@@ -172,6 +191,8 @@ export function SchoolDashboard() {
   }, [districtSchools]);
   const districtSchoolSignals = useMemo(() => districtAttendanceRows.slice().sort((a, b) => Number(b.metric_value) - Number(a.metric_value)), [districtAttendanceRows]);
   const comparedSchools = compareDbns.map((dbn) => schools.find((school) => school.dbn === dbn)).filter((school): school is SchoolRow => Boolean(school));
+  const watchDistricts = Array.from(new Set(watchlist.map((item) => item.dbn.slice(0, 2)))).sort();
+  const filteredWatchlist = watchlist.filter((item) => (watchPriority === "all" || item.priority === watchPriority) && (watchDistrict === "all" || item.dbn.startsWith(watchDistrict)));
 
   function comparisonSnapshot(dbn: string) {
     const rows = (comparisonProfiles[dbn] || []).filter((row) => selectedOutcomeMetric.variables.includes(row.metric_variable_name as never));
@@ -189,9 +210,21 @@ export function SchoolDashboard() {
     window.setTimeout(() => document.getElementById("profiles")?.scrollIntoView({ behavior: "smooth" }), 50);
   }
 
-  function printBriefing(mode: "district" | "comparison" | "profile") {
+  function printBriefing(mode: "district" | "comparison" | "profile" | "watchlist") {
     setBriefingMode(mode);
     window.setTimeout(() => window.print(), 80);
+  }
+
+  function addToWatchlist(school: SchoolRow, signal: Signal, metric: string) {
+    setWatchlist((current) => {
+      const existing = current.find((item) => item.dbn === school.dbn);
+      if (existing) return current.map((item) => item.dbn === school.dbn ? { ...item, metric, signal: signal.label, reportYear: year } : item);
+      return [...current, { ...school, priority: signal.status === "review" ? "high" : signal.status === "stable" ? "medium" : "monitor", note: "", metric, signal: signal.label, reportYear: year, addedAt: new Date().toISOString() }];
+    });
+  }
+
+  function updateWatchItem(dbn: string, changes: Partial<WatchItem>) {
+    setWatchlist((current) => current.map((item) => item.dbn === dbn ? { ...item, ...changes } : item));
   }
 
   function briefingSnapshot(rows: ProfileRow[], metric: (typeof OUTCOME_METRICS)[number]) {
@@ -259,6 +292,7 @@ export function SchoolDashboard() {
           <a href="#districts"><span>◇</span> District Explorer</a>
           <a href="#compare"><span>⇄</span> School Comparison</a>
           <a href="#profiles"><span>▤</span> School Profiles</a>
+          <a href="#watchlist"><span>☆</span> Watchlist <b className="nav-count">{watchlist.length}</b></a>
         </nav>
         <div className="sidebar-bottom">
           <a href="#health"><span>◎</span> Data Health</a>
@@ -356,7 +390,7 @@ export function SchoolDashboard() {
             <article className="panel district-schools">
               <div className="panel-head"><div><p className="eyebrow">School signals</p><h3>Attendance range</h3></div><span>Open a profile</span></div>
               {districtSchoolSignals.length ? <div className="signal-list">
-                {districtSchoolSignals.slice(0, 4).map((school, index) => <button key={`${school.dbn}-${index}`} onClick={() => openSchoolProfile(school)}><span className="signal-rank">{String(index + 1).padStart(2, "0")}</span><span><strong>{school.school_name}</strong><small>{school.dbn} · {school.school_type}</small></span><b>{(Number(school.metric_value) * 100).toFixed(1)}%</b></button>)}
+                {districtSchoolSignals.slice(0, 4).map((school, index) => { const signal = buildSignal([], Number(school.metric_value), citywideAttendanceMeasure, attendanceMeasureLabel); return <div className="signal-row" key={`${school.dbn}-${index}`}><button className="open-school" onClick={() => openSchoolProfile(school)}><span className="signal-rank">{String(index + 1).padStart(2, "0")}</span><span><strong>{school.school_name}</strong><small>{school.dbn} · {school.school_type}</small></span><b>{(Number(school.metric_value) * 100).toFixed(1)}%</b></button><button className="watch-add" onClick={() => addToWatchlist(school, signal, attendanceMeasureLabel)}>{watchlist.some((item) => item.dbn === school.dbn) ? "✓" : "+"}<span className="sr-only"> Add {school.school_name} to watchlist</span></button></div>; })}
               </div> : <p className="muted">No attendance observations are reported for this district and year.</p>}
               <p className="context-note">This list surfaces reported attendance values for exploration. It is not a school ranking or accountability determination.</p>
             </article>
@@ -382,7 +416,7 @@ export function SchoolDashboard() {
             {comparedSchools.map((school, index) => {
               const snapshot = comparisonSnapshot(school.dbn);
               return <article className={`comparison-card school-${index + 1}`} key={school.dbn}>
-                <div className="comparison-card-head"><span>{school.dbn}</span><div><h3>{school.school_name}</h3><p>{school.school_type} · District {Number(school.dbn.slice(0, 2))}</p></div><button onClick={() => openSchoolProfile(school)}>Open profile</button></div>
+                <div className="comparison-card-head"><span>{school.dbn}</span><div><h3>{school.school_name}</h3><p>{school.school_type} · District {Number(school.dbn.slice(0, 2))}</p></div><div className="card-actions"><button onClick={() => openSchoolProfile(school)}>Open profile</button><button onClick={() => addToWatchlist(school, snapshot.signal, selectedOutcomeMetric.label)}>{watchlist.some((item) => item.dbn === school.dbn) ? "✓ Watchlisted" : "+ Watchlist"}</button></div></div>
                 <div className="card-signal"><SignalBadge signal={snapshot.signal} /><span>{snapshot.signal.reason}</span></div>
                 <div className="comparison-metrics">
                   <div><span>{selectedOutcomeMetric.short}</span><strong>{snapshot.value === null ? "—" : `${(snapshot.value * 100).toFixed(1)}%`}</strong></div>
@@ -424,6 +458,7 @@ export function SchoolDashboard() {
             <span className="school-badge">{selectedSchool?.dbn.slice(-3) || "NYC"}</span>
             <div><h3>{selectedSchool?.school_name || (profileLoading ? "Loading school profile…" : "Select a school")}</h3><p>{selectedSchool?.dbn} {selectedSchool?.school_type ? `· ${selectedSchool.school_type}` : ""}</p></div>
             <span className="profile-year">Latest view · {year}</span>
+            {selectedSchool && <button className="identity-watch" onClick={() => addToWatchlist(selectedSchool, profileSignal, selectedOutcomeMetric.label)}>{watchlist.some((item) => item.dbn === selectedSchool.dbn) ? "✓ On watchlist" : "+ Add to watchlist"}</button>}
           </div>
 
           <div className="metric-tabs profile-tabs" role="group" aria-label="School profile metric">
@@ -449,6 +484,26 @@ export function SchoolDashboard() {
           </div>
         </section>
 
+        <section className="watchlist-section" id="watchlist">
+          <div className="profile-title">
+            <div><p className="eyebrow">Administrator workflow</p><h2>School Watchlist</h2><p>Organize follow-up priorities and notes for leadership review. Saved on this device.</p></div>
+            <button className="export-button" disabled={!watchlist.length} onClick={() => printBriefing("watchlist")}>⇩ Export watchlist briefing</button>
+          </div>
+          <div className="watchlist-toolbar">
+            <div><strong>{watchlist.length}</strong><span>{watchlist.length === 1 ? "school" : "schools"} being monitored</span></div>
+            <label>Priority<select value={watchPriority} onChange={(event) => setWatchPriority(event.target.value as "all" | WatchPriority)}><option value="all">All priorities</option><option value="high">High</option><option value="medium">Medium</option><option value="monitor">Monitor</option></select></label>
+            <label>District<select value={watchDistrict} onChange={(event) => setWatchDistrict(event.target.value)}><option value="all">All districts</option>{watchDistricts.map((district) => <option key={district} value={district}>District {Number(district)} — {DISTRICT_LABELS[district]}</option>)}</select></label>
+          </div>
+          {!watchlist.length ? <div className="watchlist-empty"><span>☆</span><h3>No schools on your watchlist yet</h3><p>Add a school from District Explorer, School Comparison, or a School Profile.</p></div> : !filteredWatchlist.length ? <div className="watchlist-empty"><h3>No schools match these filters</h3><p>Adjust the priority or district filter to see other watchlist items.</p></div> : <div className="watchlist-grid">{filteredWatchlist.map((item) => <article className={`watch-item priority-${item.priority}`} key={item.dbn}>
+            <header><span>{item.dbn}</span><div><h3>{item.school_name}</h3><p>{item.school_type} · District {Number(item.dbn.slice(0, 2))}</p></div><button onClick={() => setWatchlist((current) => current.filter((school) => school.dbn !== item.dbn))} aria-label={`Remove ${item.school_name} from watchlist`}>×</button></header>
+            <div className="watch-context"><span>{item.metric}</span><strong>{item.signal}</strong><small>Report year {item.reportYear}</small></div>
+            <label>Priority<select value={item.priority} onChange={(event) => updateWatchItem(item.dbn, { priority: event.target.value as WatchPriority })}><option value="high">High</option><option value="medium">Medium</option><option value="monitor">Monitor</option></select></label>
+            <label>Follow-up note<textarea value={item.note} onChange={(event) => updateWatchItem(item.dbn, { note: event.target.value })} placeholder="Add an owner, next step, or meeting note…" /></label>
+            <button className="watch-profile" onClick={() => openSchoolProfile(item)}>Open school profile</button>
+          </article>)}</div>}
+          <p className="watchlist-privacy">This personal watchlist is stored only in this browser. Clearing browser data removes it.</p>
+        </section>
+
         <footer><span>MDG School Lens</span><span>Source: NYC School Quality Reports Data</span></footer>
       </main>
 
@@ -470,6 +525,11 @@ export function SchoolDashboard() {
           <div className="briefing-heading"><p>School profile</p><h1>{selectedSchool?.school_name || "Selected school"}</h1><span>{selectedSchool?.dbn} · {selectedSchool?.school_type} · District {Number(selectedSchool?.dbn.slice(0, 2) || 0)}</span></div>
           <ExecutiveSummary observations={schoolSummary(profile, selectedSchool?.school_name || "The selected school")} />
           <div className="briefing-profile">{OUTCOME_METRICS.map((metric) => { const result = briefingSnapshot(profile, metric); return <article key={metric.key}><span>{metric.label}</span><strong>{result.value === null ? "Not reported" : `${(result.value * 100).toFixed(1)}%`}</strong><small>{result.peer === null ? "Peer not reported" : `Peer group ${(result.peer * 100).toFixed(1)}%`}</small><BriefingSignal signal={result.signal} /></article>; })}</div>
+        </>}
+        {briefingMode === "watchlist" && <>
+          <div className="briefing-heading"><p>Administrator watchlist</p><h1>Leadership follow-up priorities</h1><span>{watchlist.length} {watchlist.length === 1 ? "school" : "schools"} · Personal device list</span></div>
+          <ExecutiveSummary observations={[`${watchlist.filter((item) => item.priority === "high").length} high-priority, ${watchlist.filter((item) => item.priority === "medium").length} medium-priority, and ${watchlist.filter((item) => item.priority === "monitor").length} monitor items.`, `${new Set(watchlist.map((item) => item.dbn.slice(0, 2))).size} community school districts are represented.`, `${watchlist.filter((item) => item.note.trim()).length} items include a documented follow-up note.`]} />
+          <div className="briefing-watchlist">{watchlist.slice().sort((a, b) => ["high", "medium", "monitor"].indexOf(a.priority) - ["high", "medium", "monitor"].indexOf(b.priority)).map((item) => <article key={item.dbn}><span className={`briefing-priority ${item.priority}`}>{item.priority}</span><div><h2>{item.school_name}</h2><p>{item.dbn} · {item.school_type} · District {Number(item.dbn.slice(0, 2))}</p><strong>{item.metric} · {item.signal} · {item.reportYear}</strong><small>{item.note || "No follow-up note added."}</small></div></article>)}</div>
         </>}
         <div className="briefing-notes"><strong>Interpretation notes</strong><p>Signals describe individual metrics, not entire schools. Improving indicates a rise of at least 2 points; Needs Review indicates a decline of at least 2 points or a result at least 3 points below peers. Missing values may reflect non-applicable or suppressed data.</p></div>
         <footer><span>Source: NYC Open Data · School Quality Reports Data · dnpx-dfnc</span><span>mdg-school-lens.michael-goslin.chatgpt.site</span></footer>
