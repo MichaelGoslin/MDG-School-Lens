@@ -80,7 +80,7 @@ export function SchoolDashboard() {
     ]).then(([typeData, metricData, schoolData, districtMetricData]) => {
       setTypes(typeData as TypeRow[]);
       setMetrics(metricData as MetricRow[]);
-      const availableSchools = schoolData as SchoolRow[];
+      const availableSchools = Array.from(new Map((schoolData as SchoolRow[]).map((school) => [school.dbn, school])).values());
       setSchools(availableSchools);
       setDistrictMetrics(districtMetricData as DistrictMetricRow[]);
       if (!selectedDbn || !availableSchools.some((school) => school.dbn === selectedDbn)) {
