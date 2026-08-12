@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 
 const API = "https://data.cityofnewyork.us/resource/dnpx-dfnc.json";
+const AVERAGE_ATTENDANCE_VARIABLES = ["attendance_hs_all", "attendance_k3_all", "attendance_k8_all"];
+const NINETY_PERCENT_ATTENDANCE_VARIABLES = ["chronic_absent_all", "chronic_absent_ems_all", "chronic_absent_hs_all"];
 const DISTRICT_LABELS: Record<string, string> = {
   "01":"Manhattan · Lower East Side / East Village", "02":"Manhattan · Lower Manhattan / Midtown / Upper East Side", "03":"Manhattan · Upper West Side / West Harlem", "04":"Manhattan · East Harlem", "05":"Manhattan · Central Harlem / Morningside Heights", "06":"Manhattan · Washington Heights / Inwood",
   "07":"Bronx · Mott Haven / Port Morris", "08":"Bronx · Hunts Point / Soundview / Throgs Neck", "09":"Bronx · Morrisania / Highbridge", "10":"Bronx · Riverdale / Fordham / Kingsbridge", "11":"Bronx · Northeast Bronx / Co-op City", "12":"Bronx · East Tremont / Crotona Park",
@@ -22,7 +24,7 @@ type TypeRow = { school_type: string; schools: string };
 type MetricRow = { metric_variable_name: string; metric_display_name: string; metric_value: string };
 type SchoolRow = { dbn: string; school_name: string; school_type: string };
 type ProfileRow = MetricRow & { report_year: string; comparison_group_average?: string; number_of_students?: string };
-type DistrictMetricRow = SchoolRow & { metric_value: string };
+type DistrictMetricRow = SchoolRow & { metric_variable_name: string; metric_value: string };
 type Signal = { status: "improving" | "stable" | "review" | "insufficient"; label: string; reason: string };
 
 function query(params: Record<string, string>) {
@@ -84,8 +86,8 @@ export function SchoolDashboard() {
       }),
       query({ "$select": "dbn,school_name,school_type", "$where": where, "$group": "dbn,school_name,school_type", "$order": "school_name", "$limit": "5000" }),
       query({
-        "$select": "dbn,school_name,school_type,metric_value",
-        "$where": `${where} and metric_variable_name in('attendance_hs_all','attendance_k3_all','attendance_k8_all')`,
+        "$select": "dbn,school_name,school_type,metric_variable_name,metric_value",
+        "$where": `${where} and metric_variable_name in('attendance_hs_all','attendance_k3_all','attendance_k8_all','chronic_absent_all','chronic_absent_ems_all','chronic_absent_hs_all')`,
         "$limit": "5000",
       }),
     ]).then(([typeData, metricData, schoolData, districtMetricData]) => {
@@ -135,8 +137,8 @@ export function SchoolDashboard() {
   }, [compareDbns]);
 
   const current = years.find((item) => item.report_year === year);
-  const attendance = useMemo(() => percent(metrics, ["attendance_hs_all", "attendance_k3_all", "attendance_k8_all"]), [metrics]);
-  const strongAttendance = useMemo(() => percent(metrics, ["chronic_absent_all", "chronic_absent_ems_all", "chronic_absent_hs_all"]), [metrics]);
+  const attendance = useMemo(() => percent(metrics, AVERAGE_ATTENDANCE_VARIABLES), [metrics]);
+  const strongAttendance = useMemo(() => percent(metrics, NINETY_PERCENT_ATTENDANCE_VARIABLES), [metrics]);
   const maxSchools = Math.max(...types.map((item) => Number(item.schools)), 1);
   const selectedSchool = schools.find((school) => school.dbn === selectedDbn);
   const schoolOptions = useMemo(() => schools.filter((school) => `${school.school_name} ${school.dbn}`.toLowerCase().includes(schoolSearch.toLowerCase().split(" · ")[0])).slice(0, 8), [schools, schoolSearch]);
@@ -154,9 +156,15 @@ export function SchoolDashboard() {
   const profileSignal = buildSignal(outcomeTrend.map((point) => point.value as number), latestOutcome, peerOutcome, selectedOutcomeMetric.short);
   const districts = useMemo(() => Array.from(new Set(schools.map((school) => school.dbn.slice(0, 2)).filter((district) => /^\d{2}$/.test(district)))).sort(), [schools]);
   const districtSchools = useMemo(() => schools.filter((school) => school.dbn.startsWith(selectedDistrict)), [schools, selectedDistrict]);
-  const districtAttendanceRows = useMemo(() => districtMetrics.filter((row) => row.dbn.startsWith(selectedDistrict) && Number.isFinite(Number(row.metric_value))), [districtMetrics, selectedDistrict]);
+  const attendanceMeasure = attendance !== null ? "average" : "above90";
+  const attendanceMeasureLabel = attendanceMeasure === "average" ? "Average attendance" : "Students with 90%+ attendance";
+  const citywideAttendanceMeasure = attendanceMeasure === "average" ? attendance : strongAttendance;
+  const districtAttendanceRows = useMemo(() => {
+    const variables = attendanceMeasure === "average" ? AVERAGE_ATTENDANCE_VARIABLES : NINETY_PERCENT_ATTENDANCE_VARIABLES;
+    return districtMetrics.filter((row) => row.dbn.startsWith(selectedDistrict) && variables.includes(row.metric_variable_name) && Number.isFinite(Number(row.metric_value)));
+  }, [districtMetrics, selectedDistrict, attendanceMeasure]);
   const districtAttendance = districtAttendanceRows.length ? districtAttendanceRows.reduce((sum, row) => sum + Number(row.metric_value), 0) / districtAttendanceRows.length : null;
-  const districtSignal = buildSignal([], districtAttendance, attendance, "Attendance");
+  const districtSignal = buildSignal([], districtAttendance, citywideAttendanceMeasure, attendanceMeasureLabel);
   const districtTypeCounts = useMemo(() => {
     const counts = new Map<string, number>();
     districtSchools.forEach((school) => counts.set(school.school_type || "Unclassified", (counts.get(school.school_type || "Unclassified") || 0) + 1));
@@ -214,9 +222,9 @@ export function SchoolDashboard() {
 
   function districtSummary() {
     const observations = [`District ${Number(selectedDistrict)} includes ${districtSchools.length} schools across ${districtTypeCounts.length} reported school configurations.`];
-    if (districtAttendance !== null && attendance !== null) {
-      const gap = districtAttendance - attendance;
-      observations.push(`Average attendance is ${(districtAttendance * 100).toFixed(1)}%, ${Math.abs(gap * 100).toFixed(1)} points ${gap >= 0 ? "above" : "below"} the citywide value for ${year}.`);
+    if (districtAttendance !== null && citywideAttendanceMeasure !== null) {
+      const gap = districtAttendance - citywideAttendanceMeasure;
+      observations.push(`${attendanceMeasureLabel} is ${(districtAttendance * 100).toFixed(1)}%, ${Math.abs(gap * 100).toFixed(1)} points ${gap >= 0 ? "above" : "below"} the citywide value for ${year}.`);
     } else observations.push(`Comparable district and citywide attendance values are not both available for ${year}.`);
     observations.push(districtSignal.status === "review" ? "The attendance signal meets the current Needs Review threshold." : districtSignal.status === "insufficient" ? "Available attendance data is insufficient for a directional signal." : `The district attendance signal is ${districtSignal.label.toLowerCase()}.`);
     return observations;
@@ -330,9 +338,9 @@ export function SchoolDashboard() {
           </div>
 
           <div className="district-kpis">
-            <article><p>District attendance</p><strong>{districtAttendance === null ? "—" : `${(districtAttendance * 100).toFixed(1)}%`}</strong><small>Average across reporting schools</small></article>
-            <article><p>Citywide attendance</p><strong>{attendance === null ? "—" : `${(attendance * 100).toFixed(1)}%`}</strong><small>Same report year</small></article>
-            <article><p>District difference</p><strong className={districtAttendance !== null && attendance !== null && districtAttendance >= attendance ? "positive" : "negative"}>{districtAttendance !== null && attendance !== null ? `${((districtAttendance - attendance) * 100).toFixed(1)} pts` : "—"}</strong><small>District versus citywide</small></article>
+            <article><p>District attendance</p><strong>{districtAttendance === null ? "Not reported" : `${(districtAttendance * 100).toFixed(1)}%`}</strong><small>{attendanceMeasureLabel} across reporting schools</small></article>
+            <article><p>Citywide attendance</p><strong>{citywideAttendanceMeasure === null ? "Not reported" : `${(citywideAttendanceMeasure * 100).toFixed(1)}%`}</strong><small>{attendanceMeasureLabel} · same report year</small></article>
+            <article><p>District difference</p><strong className={districtAttendance !== null && citywideAttendanceMeasure !== null && districtAttendance >= citywideAttendanceMeasure ? "positive" : "negative"}>{districtAttendance !== null && citywideAttendanceMeasure !== null ? `${((districtAttendance - citywideAttendanceMeasure) * 100).toFixed(1)} pts` : "Not reported"}</strong><small>District versus citywide</small></article>
             <article><p>School types</p><strong>{districtTypeCounts.length}</strong><small>Reported configurations</small></article>
           </div>
           <div className="district-signal"><SignalBadge signal={districtSignal} /><p>{districtSignal.reason}</p></div>
@@ -449,7 +457,7 @@ export function SchoolDashboard() {
         {briefingMode === "district" && <>
           <div className="briefing-heading"><p>District briefing</p><h1>Community School District {Number(selectedDistrict)}</h1><span>{DISTRICT_LABELS[selectedDistrict]}</span></div>
           <ExecutiveSummary observations={districtSummary()} />
-          <div className="briefing-kpis"><div><span>Schools</span><strong>{districtSchools.length}</strong></div><div><span>District attendance</span><strong>{districtAttendance === null ? "—" : `${(districtAttendance * 100).toFixed(1)}%`}</strong></div><div><span>Citywide</span><strong>{attendance === null ? "—" : `${(attendance * 100).toFixed(1)}%`}</strong></div><div><span>Difference</span><strong>{districtAttendance !== null && attendance !== null ? `${((districtAttendance - attendance) * 100).toFixed(1)} pts` : "—"}</strong></div></div>
+          <div className="briefing-kpis"><div><span>Schools</span><strong>{districtSchools.length}</strong></div><div><span>District · {attendanceMeasureLabel}</span><strong>{districtAttendance === null ? "Not reported" : `${(districtAttendance * 100).toFixed(1)}%`}</strong></div><div><span>Citywide</span><strong>{citywideAttendanceMeasure === null ? "Not reported" : `${(citywideAttendanceMeasure * 100).toFixed(1)}%`}</strong></div><div><span>Difference</span><strong>{districtAttendance !== null && citywideAttendanceMeasure !== null ? `${((districtAttendance - citywideAttendanceMeasure) * 100).toFixed(1)} pts` : "Not reported"}</strong></div></div>
           <BriefingSignal signal={districtSignal} />
           <h2>School configuration</h2><div className="briefing-list">{districtTypeCounts.map((item) => <div key={item.label}><span>{item.label}</span><strong>{item.value} schools</strong></div>)}</div>
         </>}
