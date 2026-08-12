@@ -3,6 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 
 const API = "https://data.cityofnewyork.us/resource/dnpx-dfnc.json";
+const DISTRICT_LABELS: Record<string, string> = {
+  "01":"Manhattan · Lower East Side / East Village", "02":"Manhattan · Lower Manhattan / Midtown / Upper East Side", "03":"Manhattan · Upper West Side / West Harlem", "04":"Manhattan · East Harlem", "05":"Manhattan · Central Harlem / Morningside Heights", "06":"Manhattan · Washington Heights / Inwood",
+  "07":"Bronx · Mott Haven / Port Morris", "08":"Bronx · Hunts Point / Soundview / Throgs Neck", "09":"Bronx · Morrisania / Highbridge", "10":"Bronx · Riverdale / Fordham / Kingsbridge", "11":"Bronx · Northeast Bronx / Co-op City", "12":"Bronx · East Tremont / Crotona Park",
+  "13":"Brooklyn · Downtown / Fort Greene / Brooklyn Heights", "14":"Brooklyn · Williamsburg / Greenpoint", "15":"Brooklyn · Park Slope / Sunset Park / Red Hook", "16":"Brooklyn · Bedford-Stuyvesant", "17":"Brooklyn · Crown Heights / East Flatbush", "18":"Brooklyn · Canarsie / East Flatbush", "19":"Brooklyn · East New York", "20":"Brooklyn · Bay Ridge / Bensonhurst", "21":"Brooklyn · Coney Island / Brighton Beach", "22":"Brooklyn · Flatbush / Marine Park", "23":"Brooklyn · Brownsville / Ocean Hill", "24":"Queens · Corona / Elmhurst / Ridgewood", "25":"Queens · Flushing / Whitestone", "26":"Queens · Bayside / Fresh Meadows", "27":"Queens · Far Rockaway / Howard Beach", "28":"Queens · Jamaica / Forest Hills", "29":"Queens · Southeast Queens", "30":"Queens · Astoria / Long Island City / Jackson Heights", "31":"Staten Island · Boroughwide", "32":"Brooklyn · Bushwick",
+};
 
 type YearRow = { report_year: string; schools: string; records: string };
 type TypeRow = { school_type: string; schools: string };
@@ -40,6 +45,9 @@ export function SchoolDashboard() {
   const [profileLoading, setProfileLoading] = useState(false);
   const [districtMetrics, setDistrictMetrics] = useState<DistrictMetricRow[]>([]);
   const [selectedDistrict, setSelectedDistrict] = useState("01");
+  const [compareDbns, setCompareDbns] = useState<[string, string]>(["", ""]);
+  const [comparisonProfiles, setComparisonProfiles] = useState<Record<string, ProfileRow[]>>({});
+  const [comparisonLoading, setComparisonLoading] = useState(false);
 
   useEffect(() => {
     query({
@@ -79,6 +87,10 @@ export function SchoolDashboard() {
         setSelectedDbn(availableSchools[0]?.dbn || "");
         setSchoolSearch(availableSchools[0] ? `${availableSchools[0].school_name} · ${availableSchools[0].dbn}` : "");
       }
+      setCompareDbns((current) => [
+        availableSchools.some((school) => school.dbn === current[0]) ? current[0] : (availableSchools[0]?.dbn || ""),
+        availableSchools.some((school) => school.dbn === current[1]) ? current[1] : (availableSchools[1]?.dbn || availableSchools[0]?.dbn || ""),
+      ]);
       setUpdated(new Date());
     }).catch(() => setError("NYC Open Data is temporarily unavailable. Try refreshing shortly."))
       .finally(() => setLoading(false));
@@ -95,6 +107,21 @@ export function SchoolDashboard() {
       "$limit": "500",
     }).then((data: ProfileRow[]) => setProfile(data)).catch(() => setProfile([])).finally(() => setProfileLoading(false));
   }, [selectedDbn]);
+
+  useEffect(() => {
+    const dbns = Array.from(new Set(compareDbns.filter(Boolean)));
+    if (!dbns.length) return;
+    setComparisonLoading(true);
+    Promise.all(dbns.map((dbn) => query({
+      "$select": "report_year,metric_variable_name,metric_display_name,metric_value,comparison_group_average,number_of_students",
+      "$where": `dbn='${dbn}' and metric_variable_name in('attendance_hs_all','attendance_k3_all','attendance_k8_all')`,
+      "$order": "report_year",
+      "$limit": "100",
+    }).then((rows: ProfileRow[]) => [dbn, rows] as const)))
+      .then((entries) => setComparisonProfiles(Object.fromEntries(entries)))
+      .catch(() => setComparisonProfiles({}))
+      .finally(() => setComparisonLoading(false));
+  }, [compareDbns]);
 
   const current = years.find((item) => item.report_year === year);
   const attendance = useMemo(() => percent(metrics, ["attendance_hs_all", "attendance_k3_all", "attendance_k8_all"]), [metrics]);
@@ -123,6 +150,16 @@ export function SchoolDashboard() {
     return Array.from(counts, ([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
   }, [districtSchools]);
   const districtSchoolSignals = useMemo(() => districtAttendanceRows.slice().sort((a, b) => Number(b.metric_value) - Number(a.metric_value)), [districtAttendanceRows]);
+  const comparedSchools = compareDbns.map((dbn) => schools.find((school) => school.dbn === dbn)).filter((school): school is SchoolRow => Boolean(school));
+
+  function comparisonSnapshot(dbn: string) {
+    const rows = comparisonProfiles[dbn] || [];
+    const latest = rows.find((row) => row.report_year === year) || rows.at(-1);
+    const value = latest && Number.isFinite(Number(latest.metric_value)) ? Number(latest.metric_value) : null;
+    const peer = latest?.comparison_group_average && Number.isFinite(Number(latest.comparison_group_average)) ? Number(latest.comparison_group_average) : null;
+    const trend = years.slice().reverse().map((item) => ({ year: item.report_year, row: rows.find((row) => row.report_year === item.report_year) })).filter((item) => item.row && Number.isFinite(Number(item.row.metric_value)));
+    return { value, peer, trend, reportedYear: latest?.report_year || "—", students: latest?.number_of_students || "—" };
+  }
 
   function openSchoolProfile(school: SchoolRow) {
     setSelectedDbn(school.dbn);
@@ -180,7 +217,7 @@ export function SchoolDashboard() {
         </section>
 
         <section className="content-grid">
-          <article className="panel comparison" id="compare">
+          <article className="panel comparison" id="composition">
             <div className="panel-head"><div><p className="eyebrow">System composition</p><h3>Schools by type</h3></div><span>{year}</span></div>
             <div className="bars">
               {loading && <p className="muted">Loading live comparison…</p>}
@@ -207,13 +244,13 @@ export function SchoolDashboard() {
             <div><p className="eyebrow">Geographic intelligence</p><h2>District Explorer</h2><p>Review district coverage, attendance context, school mix, and schools that warrant a closer look.</p></div>
             <label className="district-select">Community school district
               <select value={selectedDistrict} onChange={(event) => setSelectedDistrict(event.target.value)} aria-label="Community school district">
-                {districts.map((district) => <option value={district} key={district}>District {Number(district)}</option>)}
+                {districts.map((district) => <option value={district} key={district}>District {Number(district)} — {DISTRICT_LABELS[district]}</option>)}
               </select>
             </label>
           </div>
 
           <div className="district-banner">
-            <div><span>NYCPS</span><h3>Community School District {Number(selectedDistrict)}</h3><p>{year} School Quality Reports</p></div>
+            <div><span>NYCPS</span><h3>Community School District {Number(selectedDistrict)}</h3><p>{DISTRICT_LABELS[selectedDistrict]} · {year} School Quality Reports</p></div>
             <div className="district-summary"><strong>{districtSchools.length}</strong><span>schools represented</span></div>
           </div>
 
@@ -240,6 +277,40 @@ export function SchoolDashboard() {
               <p className="context-note">This list surfaces reported attendance values for exploration. It is not a school ranking or accountability determination.</p>
             </article>
           </div>
+        </section>
+
+        <section className="compare-section" id="compare">
+          <div className="profile-title">
+            <div><p className="eyebrow">Side-by-side intelligence</p><h2>School Comparison</h2><p>Compare two schools across attendance, peer context, coverage, and reporting history.</p></div>
+          </div>
+          <div className="compare-selectors">
+            {([0, 1] as const).map((position) => <label key={position}>School {position + 1}
+              <select value={compareDbns[position]} onChange={(event) => setCompareDbns((current) => position === 0 ? [event.target.value, current[1]] : [current[0], event.target.value])}>
+                {schools.map((school) => <option value={school.dbn} key={`${position}-${school.dbn}`}>{school.school_name} · {school.dbn}</option>)}
+              </select>
+            </label>)}
+          </div>
+
+          <div className="comparison-board">
+            {comparedSchools.map((school, index) => {
+              const snapshot = comparisonSnapshot(school.dbn);
+              return <article className={`comparison-card school-${index + 1}`} key={school.dbn}>
+                <div className="comparison-card-head"><span>{school.dbn}</span><div><h3>{school.school_name}</h3><p>{school.school_type} · District {Number(school.dbn.slice(0, 2))}</p></div><button onClick={() => openSchoolProfile(school)}>Open profile</button></div>
+                <div className="comparison-metrics">
+                  <div><span>Attendance</span><strong>{snapshot.value === null ? "—" : `${(snapshot.value * 100).toFixed(1)}%`}</strong></div>
+                  <div><span>Peer group</span><strong>{snapshot.peer === null ? "—" : `${(snapshot.peer * 100).toFixed(1)}%`}</strong></div>
+                  <div><span>Peer difference</span><strong className={snapshot.value !== null && snapshot.peer !== null && snapshot.value >= snapshot.peer ? "positive" : "negative"}>{snapshot.value !== null && snapshot.peer !== null ? `${((snapshot.value - snapshot.peer) * 100).toFixed(1)} pts` : "—"}</strong></div>
+                  <div><span>Students represented</span><strong>{snapshot.students}</strong></div>
+                </div>
+                <div className="mini-trend">
+                  <div className="mini-trend-head"><span>Multi-year attendance</span><small>{snapshot.trend.length} years reported</small></div>
+                  <div className="mini-bars">{snapshot.trend.map(({ year: trendYear, row }) => <div key={trendYear} title={`${trendYear}: ${(Number(row?.metric_value) * 100).toFixed(1)}%`}><span>{(Number(row?.metric_value) * 100).toFixed(0)}</span><i style={{ height: `${Math.max(10, (Number(row?.metric_value) - .7) * 290)}%` }} /><small>{trendYear.slice(-2)}</small></div>)}</div>
+                </div>
+              </article>;
+            })}
+          </div>
+          {comparisonLoading && <p className="compare-loading">Updating comparison from NYC Open Data…</p>}
+          <p className="comparison-note">Friendly district labels use boroughs and representative neighborhoods for orientation; official NYCPS district identities remain numeric. Comparisons provide context and should not be interpreted as rankings.</p>
         </section>
 
         <section className="panel timeline" id="history">
