@@ -195,6 +195,50 @@ export function SchoolDashboard() {
     return { value, peer, signal: buildSignal(values, value, peer, metric.short) };
   }
 
+  function schoolSummary(rows: ProfileRow[], schoolName: string) {
+    const results = OUTCOME_METRICS.map((metric) => ({ metric, ...briefingSnapshot(rows, metric) }));
+    const reported = results.filter((item) => item.value !== null);
+    const review = reported.filter((item) => item.signal.status === "review");
+    const improving = reported.filter((item) => item.signal.status === "improving");
+    const peerGaps = reported.filter((item) => item.peer !== null).map((item) => ({ ...item, gap: item.value! - item.peer! })).sort((a, b) => Math.abs(b.gap) - Math.abs(a.gap));
+    const observations = [`${schoolName} reports ${reported.length} of ${OUTCOME_METRICS.length} briefing metrics for ${year}.`];
+    if (review.length) observations.push(`${review.length} ${review.length === 1 ? "metric warrants" : "metrics warrant"} review: ${review.map((item) => item.metric.short).join(", ")}.`);
+    else if (reported.length) observations.push("No reported metric meets the current Needs Review thresholds.");
+    if (improving.length) observations.push(`Improving signals appear in ${improving.map((item) => item.metric.short).join(", ")}.`);
+    else if (peerGaps.length) {
+      const item = peerGaps[0];
+      observations.push(`${item.metric.short} has the largest reported peer difference at ${Math.abs(item.gap * 100).toFixed(1)} points ${item.gap >= 0 ? "above" : "below"} the comparison group.`);
+    } else observations.push("Peer context is not available for the reported briefing metrics.");
+    return observations.slice(0, 3);
+  }
+
+  function districtSummary() {
+    const observations = [`District ${Number(selectedDistrict)} includes ${districtSchools.length} schools across ${districtTypeCounts.length} reported school configurations.`];
+    if (districtAttendance !== null && attendance !== null) {
+      const gap = districtAttendance - attendance;
+      observations.push(`Average attendance is ${(districtAttendance * 100).toFixed(1)}%, ${Math.abs(gap * 100).toFixed(1)} points ${gap >= 0 ? "above" : "below"} the citywide value for ${year}.`);
+    } else observations.push(`Comparable district and citywide attendance values are not both available for ${year}.`);
+    observations.push(districtSignal.status === "review" ? "The attendance signal meets the current Needs Review threshold." : districtSignal.status === "insufficient" ? "Available attendance data is insufficient for a directional signal." : `The district attendance signal is ${districtSignal.label.toLowerCase()}.`);
+    return observations;
+  }
+
+  function comparisonSummary() {
+    const results = comparedSchools.map((school) => ({ school, metrics: OUTCOME_METRICS.map((metric) => ({ metric, ...briefingSnapshot(comparisonProfiles[school.dbn] || [], metric) })) }));
+    const observations = [`The comparison covers ${comparedSchools.length} schools and ${OUTCOME_METRICS.length} outcome measures for ${year}.`];
+    const reviewDetails = results.map((item) => ({ name: item.school.school_name, metrics: item.metrics.filter((metric) => metric.signal.status === "review") })).filter((item) => item.metrics.length);
+    if (reviewDetails.length) observations.push(reviewDetails.map((item) => `${item.name}: ${item.metrics.map((metric) => metric.metric.short).join(", ")}`).join("; ") + " meet the Needs Review threshold.");
+    else observations.push("Neither school has a reported metric meeting the current Needs Review threshold.");
+    const gaps = OUTCOME_METRICS.map((metric) => {
+      const values = results.map((item) => item.metrics.find((result) => result.metric.key === metric.key)?.value ?? null);
+      return values.every((value) => value !== null) ? { metric, gap: values[0]! - values[1]! } : null;
+    }).filter((item): item is { metric: (typeof OUTCOME_METRICS)[number]; gap: number } => Boolean(item)).sort((a, b) => Math.abs(b.gap) - Math.abs(a.gap));
+    if (gaps.length) {
+      const largest = gaps[0];
+      observations.push(`${largest.metric.short} shows the largest reported difference between the two schools at ${Math.abs(largest.gap * 100).toFixed(1)} points.`);
+    } else observations.push("The schools do not share enough reported measures for a direct outcome-gap observation.");
+    return observations;
+  }
+
   return (
     <div className={`app-shell ${loading ? "is-refreshing" : ""}`} aria-busy={loading}>
       <div className={`load-progress ${loading ? "visible" : ""}`} role="status" aria-live="polite">
@@ -404,16 +448,19 @@ export function SchoolDashboard() {
         <header><div><span className="briefing-mark">M</span><div><strong>MDG School Lens</strong><small>Leadership Briefing</small></div></div><p>Report year {year}<br />Prepared {new Date().toLocaleDateString()}</p></header>
         {briefingMode === "district" && <>
           <div className="briefing-heading"><p>District briefing</p><h1>Community School District {Number(selectedDistrict)}</h1><span>{DISTRICT_LABELS[selectedDistrict]}</span></div>
+          <ExecutiveSummary observations={districtSummary()} />
           <div className="briefing-kpis"><div><span>Schools</span><strong>{districtSchools.length}</strong></div><div><span>District attendance</span><strong>{districtAttendance === null ? "—" : `${(districtAttendance * 100).toFixed(1)}%`}</strong></div><div><span>Citywide</span><strong>{attendance === null ? "—" : `${(attendance * 100).toFixed(1)}%`}</strong></div><div><span>Difference</span><strong>{districtAttendance !== null && attendance !== null ? `${((districtAttendance - attendance) * 100).toFixed(1)} pts` : "—"}</strong></div></div>
           <BriefingSignal signal={districtSignal} />
           <h2>School configuration</h2><div className="briefing-list">{districtTypeCounts.map((item) => <div key={item.label}><span>{item.label}</span><strong>{item.value} schools</strong></div>)}</div>
         </>}
         {briefingMode === "comparison" && <>
           <div className="briefing-heading"><p>School comparison</p><h1>{comparedSchools.map((school) => school.school_name).join(" vs. ")}</h1><span>Side-by-side outcome context</span></div>
+          <ExecutiveSummary observations={comparisonSummary()} />
           <div className="briefing-schools">{comparedSchools.map((school) => <article key={school.dbn}><h2>{school.school_name}</h2><p>{school.dbn} · {school.school_type} · District {Number(school.dbn.slice(0, 2))}</p>{OUTCOME_METRICS.map((metric) => { const result = briefingSnapshot(comparisonProfiles[school.dbn] || [], metric); return <div className="briefing-metric" key={metric.key}><span>{metric.label}</span><strong>{result.value === null ? "Not reported" : `${(result.value * 100).toFixed(1)}%`}</strong><SignalBadge signal={result.signal} /></div>; })}</article>)}</div>
         </>}
         {briefingMode === "profile" && <>
           <div className="briefing-heading"><p>School profile</p><h1>{selectedSchool?.school_name || "Selected school"}</h1><span>{selectedSchool?.dbn} · {selectedSchool?.school_type} · District {Number(selectedSchool?.dbn.slice(0, 2) || 0)}</span></div>
+          <ExecutiveSummary observations={schoolSummary(profile, selectedSchool?.school_name || "The selected school")} />
           <div className="briefing-profile">{OUTCOME_METRICS.map((metric) => { const result = briefingSnapshot(profile, metric); return <article key={metric.key}><span>{metric.label}</span><strong>{result.value === null ? "Not reported" : `${(result.value * 100).toFixed(1)}%`}</strong><small>{result.peer === null ? "Peer not reported" : `Peer group ${(result.peer * 100).toFixed(1)}%`}</small><BriefingSignal signal={result.signal} /></article>; })}</div>
         </>}
         <div className="briefing-notes"><strong>Interpretation notes</strong><p>Signals describe individual metrics, not entire schools. Improving indicates a rise of at least 2 points; Needs Review indicates a decline of at least 2 points or a result at least 3 points below peers. Missing values may reflect non-applicable or suppressed data.</p></div>
@@ -447,4 +494,8 @@ function SignalBadge({ signal }: { signal: Signal }) {
 
 function BriefingSignal({ signal }: { signal: Signal }) {
   return <div className={`briefing-signal ${signal.status}`}><strong>{signal.label}</strong><span>{signal.reason}</span></div>;
+}
+
+function ExecutiveSummary({ observations }: { observations: string[] }) {
+  return <section className="executive-summary"><h2>Executive summary</h2><ol>{observations.map((observation, index) => <li key={`${index}-${observation}`}>{observation}</li>)}</ol></section>;
 }
