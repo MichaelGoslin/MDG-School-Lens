@@ -8,6 +8,14 @@ const DISTRICT_LABELS: Record<string, string> = {
   "07":"Bronx · Mott Haven / Port Morris", "08":"Bronx · Hunts Point / Soundview / Throgs Neck", "09":"Bronx · Morrisania / Highbridge", "10":"Bronx · Riverdale / Fordham / Kingsbridge", "11":"Bronx · Northeast Bronx / Co-op City", "12":"Bronx · East Tremont / Crotona Park",
   "13":"Brooklyn · Downtown / Fort Greene / Brooklyn Heights", "14":"Brooklyn · Williamsburg / Greenpoint", "15":"Brooklyn · Park Slope / Sunset Park / Red Hook", "16":"Brooklyn · Bedford-Stuyvesant", "17":"Brooklyn · Crown Heights / East Flatbush", "18":"Brooklyn · Canarsie / East Flatbush", "19":"Brooklyn · East New York", "20":"Brooklyn · Bay Ridge / Bensonhurst", "21":"Brooklyn · Coney Island / Brighton Beach", "22":"Brooklyn · Flatbush / Marine Park", "23":"Brooklyn · Brownsville / Ocean Hill", "24":"Queens · Corona / Elmhurst / Ridgewood", "25":"Queens · Flushing / Whitestone", "26":"Queens · Bayside / Fresh Meadows", "27":"Queens · Far Rockaway / Howard Beach", "28":"Queens · Jamaica / Forest Hills", "29":"Queens · Southeast Queens", "30":"Queens · Astoria / Long Island City / Jackson Heights", "31":"Staten Island · Boroughwide", "32":"Brooklyn · Bushwick",
 };
+const OUTCOME_METRICS = [
+  { key: "attendance", label: "Attendance", short: "Attendance", variables: ["attendance_hs_all", "attendance_k3_all", "attendance_k8_all"] },
+  { key: "ela", label: "ELA proficiency", short: "ELA", variables: ["prof_pct_ela_all"] },
+  { key: "math", label: "Math proficiency", short: "Math", variables: ["prof_pct_mth_all"] },
+  { key: "graduation", label: "4-year graduation", short: "Graduation", variables: ["grad_pct_4_all"] },
+  { key: "readiness", label: "College & career", short: "Readiness", variables: ["pct_cpci_all"] },
+] as const;
+const OUTCOME_VARIABLES = OUTCOME_METRICS.flatMap((metric) => metric.variables).map((variable) => `'${variable}'`).join(",");
 
 type YearRow = { report_year: string; schools: string; records: string };
 type TypeRow = { school_type: string; schools: string };
@@ -48,6 +56,7 @@ export function SchoolDashboard() {
   const [compareDbns, setCompareDbns] = useState<[string, string]>(["", ""]);
   const [comparisonProfiles, setComparisonProfiles] = useState<Record<string, ProfileRow[]>>({});
   const [comparisonLoading, setComparisonLoading] = useState(false);
+  const [selectedOutcome, setSelectedOutcome] = useState<(typeof OUTCOME_METRICS)[number]["key"]>("attendance");
 
   useEffect(() => {
     query({
@@ -99,7 +108,7 @@ export function SchoolDashboard() {
   useEffect(() => {
     if (!selectedDbn) return;
     setProfileLoading(true);
-    const variables = "'attendance_hs_all','attendance_k3_all','attendance_k8_all','chronic_absent_all','chronic_absent_ems_all','chronic_absent_hs_all'";
+    const variables = `${OUTCOME_VARIABLES},'chronic_absent_all','chronic_absent_ems_all','chronic_absent_hs_all'`;
     query({
       "$select": "report_year,metric_variable_name,metric_display_name,metric_value,comparison_group_average,number_of_students",
       "$where": `dbn='${selectedDbn}' and metric_variable_name in(${variables})`,
@@ -114,7 +123,7 @@ export function SchoolDashboard() {
     setComparisonLoading(true);
     Promise.all(dbns.map((dbn) => query({
       "$select": "report_year,metric_variable_name,metric_display_name,metric_value,comparison_group_average,number_of_students",
-      "$where": `dbn='${dbn}' and metric_variable_name in('attendance_hs_all','attendance_k3_all','attendance_k8_all')`,
+      "$where": `dbn='${dbn}' and metric_variable_name in(${OUTCOME_VARIABLES})`,
       "$order": "report_year",
       "$limit": "100",
     }).then((rows: ProfileRow[]) => [dbn, rows] as const)))
@@ -129,17 +138,17 @@ export function SchoolDashboard() {
   const maxSchools = Math.max(...types.map((item) => Number(item.schools)), 1);
   const selectedSchool = schools.find((school) => school.dbn === selectedDbn);
   const schoolOptions = useMemo(() => schools.filter((school) => `${school.school_name} ${school.dbn}`.toLowerCase().includes(schoolSearch.toLowerCase().split(" · ")[0])).slice(0, 8), [schools, schoolSearch]);
-  const attendanceTrend = useMemo(() => {
-    const attendanceNames = ["attendance_hs_all", "attendance_k3_all", "attendance_k8_all"];
+  const selectedOutcomeMetric = OUTCOME_METRICS.find((metric) => metric.key === selectedOutcome) || OUTCOME_METRICS[0];
+  const outcomeTrend = useMemo(() => {
     return years.slice().reverse().map((item) => {
-      const rows = profile.filter((row) => row.report_year === item.report_year && attendanceNames.includes(row.metric_variable_name));
+      const rows = profile.filter((row) => row.report_year === item.report_year && selectedOutcomeMetric.variables.includes(row.metric_variable_name as never));
       const value = rows.length ? Number(rows[0].metric_value) : null;
       return { year: item.report_year, value: value !== null && Number.isFinite(value) ? value : null };
     }).filter((item) => item.value !== null);
-  }, [profile, years]);
-  const latestAttendance = attendanceTrend.find((item) => item.year === year)?.value ?? attendanceTrend.at(-1)?.value ?? null;
-  const latestProfileRow = profile.find((row) => row.report_year === year && ["attendance_hs_all", "attendance_k3_all", "attendance_k8_all"].includes(row.metric_variable_name));
-  const peerAttendance = latestProfileRow?.comparison_group_average ? Number(latestProfileRow.comparison_group_average) : null;
+  }, [profile, years, selectedOutcomeMetric]);
+  const latestOutcome = outcomeTrend.find((item) => item.year === year)?.value ?? outcomeTrend.at(-1)?.value ?? null;
+  const latestProfileRow = profile.find((row) => row.report_year === year && selectedOutcomeMetric.variables.includes(row.metric_variable_name as never)) || profile.filter((row) => selectedOutcomeMetric.variables.includes(row.metric_variable_name as never)).at(-1);
+  const peerOutcome = latestProfileRow?.comparison_group_average ? Number(latestProfileRow.comparison_group_average) : null;
   const districts = useMemo(() => Array.from(new Set(schools.map((school) => school.dbn.slice(0, 2)).filter((district) => /^\d{2}$/.test(district)))).sort(), [schools]);
   const districtSchools = useMemo(() => schools.filter((school) => school.dbn.startsWith(selectedDistrict)), [schools, selectedDistrict]);
   const districtAttendanceRows = useMemo(() => districtMetrics.filter((row) => row.dbn.startsWith(selectedDistrict) && Number.isFinite(Number(row.metric_value))), [districtMetrics, selectedDistrict]);
@@ -153,7 +162,7 @@ export function SchoolDashboard() {
   const comparedSchools = compareDbns.map((dbn) => schools.find((school) => school.dbn === dbn)).filter((school): school is SchoolRow => Boolean(school));
 
   function comparisonSnapshot(dbn: string) {
-    const rows = comparisonProfiles[dbn] || [];
+    const rows = (comparisonProfiles[dbn] || []).filter((row) => selectedOutcomeMetric.variables.includes(row.metric_variable_name as never));
     const latest = rows.find((row) => row.report_year === year) || rows.at(-1);
     const value = latest && Number.isFinite(Number(latest.metric_value)) ? Number(latest.metric_value) : null;
     const peer = latest?.comparison_group_average && Number.isFinite(Number(latest.comparison_group_average)) ? Number(latest.comparison_group_average) : null;
@@ -290,6 +299,9 @@ export function SchoolDashboard() {
               </select>
             </label>)}
           </div>
+          <div className="metric-tabs compare-tabs" role="group" aria-label="Comparison metric">
+            {OUTCOME_METRICS.map((metric) => <button key={metric.key} className={selectedOutcome === metric.key ? "selected" : ""} onClick={() => setSelectedOutcome(metric.key)}>{metric.label}</button>)}
+          </div>
 
           <div className="comparison-board">
             {comparedSchools.map((school, index) => {
@@ -297,13 +309,13 @@ export function SchoolDashboard() {
               return <article className={`comparison-card school-${index + 1}`} key={school.dbn}>
                 <div className="comparison-card-head"><span>{school.dbn}</span><div><h3>{school.school_name}</h3><p>{school.school_type} · District {Number(school.dbn.slice(0, 2))}</p></div><button onClick={() => openSchoolProfile(school)}>Open profile</button></div>
                 <div className="comparison-metrics">
-                  <div><span>Attendance</span><strong>{snapshot.value === null ? "—" : `${(snapshot.value * 100).toFixed(1)}%`}</strong></div>
+                  <div><span>{selectedOutcomeMetric.short}</span><strong>{snapshot.value === null ? "—" : `${(snapshot.value * 100).toFixed(1)}%`}</strong></div>
                   <div><span>Peer group</span><strong>{snapshot.peer === null ? "—" : `${(snapshot.peer * 100).toFixed(1)}%`}</strong></div>
                   <div><span>Peer difference</span><strong className={snapshot.value !== null && snapshot.peer !== null && snapshot.value >= snapshot.peer ? "positive" : "negative"}>{snapshot.value !== null && snapshot.peer !== null ? `${((snapshot.value - snapshot.peer) * 100).toFixed(1)} pts` : "—"}</strong></div>
                   <div><span>Students represented</span><strong>{snapshot.students}</strong></div>
                 </div>
                 <div className="mini-trend">
-                  <div className="mini-trend-head"><span>Multi-year attendance</span><small>{snapshot.trend.length} years reported</small></div>
+                  <div className="mini-trend-head"><span>Multi-year {selectedOutcomeMetric.short.toLowerCase()}</span><small>{snapshot.trend.length} years reported</small></div>
                   <div className="mini-bars">{snapshot.trend.map(({ year: trendYear, row }) => <div key={trendYear} title={`${trendYear}: ${(Number(row?.metric_value) * 100).toFixed(1)}%`}><span>{(Number(row?.metric_value) * 100).toFixed(0)}</span><i style={{ height: `${Math.max(10, (Number(row?.metric_value) - .7) * 290)}%` }} /><small>{trendYear.slice(-2)}</small></div>)}</div>
                 </div>
               </article>;
@@ -338,19 +350,23 @@ export function SchoolDashboard() {
             <span className="profile-year">Latest view · {year}</span>
           </div>
 
+          <div className="metric-tabs profile-tabs" role="group" aria-label="School profile metric">
+            {OUTCOME_METRICS.map((metric) => <button key={metric.key} className={selectedOutcome === metric.key ? "selected" : ""} onClick={() => setSelectedOutcome(metric.key)}>{metric.label}</button>)}
+          </div>
+
           <div className="profile-grid">
             <article className="panel trend-panel">
-              <div className="panel-head"><div><p className="eyebrow">Longitudinal view</p><h3>Average student attendance</h3></div><span>{attendanceTrend.length} years reported</span></div>
-              {profileLoading ? <p className="muted">Loading school history…</p> : attendanceTrend.length ? <div className="trend-chart" aria-label="Attendance trend by year">
-                {attendanceTrend.map((point) => <div className="trend-column" key={point.year} title={`${point.year}: ${((point.value || 0) * 100).toFixed(1)}%`}><span>{((point.value || 0) * 100).toFixed(0)}%</span><div><i style={{ height: `${Math.max(8, ((point.value || 0) - .7) * 300)}%` }} /></div><small>{point.year.slice(-2)}</small></div>)}
-              </div> : <p className="muted">No attendance history is reported for this school.</p>}
+              <div className="panel-head"><div><p className="eyebrow">Longitudinal view</p><h3>{selectedOutcomeMetric.label}</h3></div><span>{outcomeTrend.length} years reported</span></div>
+              {profileLoading ? <p className="muted">Loading school history…</p> : outcomeTrend.length ? <div className="trend-chart" aria-label={`${selectedOutcomeMetric.label} trend by year`}>
+                {outcomeTrend.map((point) => <div className="trend-column" key={point.year} title={`${point.year}: ${((point.value || 0) * 100).toFixed(1)}%`}><span>{((point.value || 0) * 100).toFixed(0)}%</span><div><i style={{ height: `${Math.max(8, ((point.value || 0) - .25) * 130)}%` }} /></div><small>{point.year.slice(-2)}</small></div>)}
+              </div> : <p className="muted">This metric is not reported for this school type or reporting period.</p>}
             </article>
 
             <article className="panel peer-panel">
               <div className="panel-head"><div><p className="eyebrow">Context matters</p><h3>Peer comparison</h3></div><span>{year}</span></div>
-              <div className="comparison-score"><strong>{latestAttendance === null ? "—" : `${(latestAttendance * 100).toFixed(1)}%`}</strong><span>School attendance</span></div>
-              <div className="peer-line"><span>Comparison group</span><strong>{peerAttendance !== null && Number.isFinite(peerAttendance) ? `${(peerAttendance * 100).toFixed(1)}%` : "Not reported"}</strong></div>
-              <div className="peer-line"><span>Difference</span><strong className={latestAttendance !== null && peerAttendance !== null && latestAttendance >= peerAttendance ? "positive" : "negative"}>{latestAttendance !== null && peerAttendance !== null && Number.isFinite(peerAttendance) ? `${((latestAttendance - peerAttendance) * 100).toFixed(1)} pts` : "—"}</strong></div>
+              <div className="comparison-score"><strong>{latestOutcome === null ? "—" : `${(latestOutcome * 100).toFixed(1)}%`}</strong><span>School {selectedOutcomeMetric.short.toLowerCase()}</span></div>
+              <div className="peer-line"><span>Comparison group</span><strong>{peerOutcome !== null && Number.isFinite(peerOutcome) ? `${(peerOutcome * 100).toFixed(1)}%` : "Not reported"}</strong></div>
+              <div className="peer-line"><span>Difference</span><strong className={latestOutcome !== null && peerOutcome !== null && latestOutcome >= peerOutcome ? "positive" : "negative"}>{latestOutcome !== null && peerOutcome !== null && Number.isFinite(peerOutcome) ? `${((latestOutcome - peerOutcome) * 100).toFixed(1)} pts` : "—"}</strong></div>
               <p className="context-note">Use the comparison group as context, not a ranking. School type, population, and reporting coverage can affect interpretation.</p>
             </article>
           </div>
