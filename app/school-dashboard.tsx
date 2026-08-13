@@ -67,6 +67,27 @@ export function SchoolDashboard() {
   const [watchlistReady, setWatchlistReady] = useState(false);
   const [watchPriority, setWatchPriority] = useState<"all" | WatchPriority>("all");
   const [watchDistrict, setWatchDistrict] = useState("all");
+  const [activeSection, setActiveSection] = useState("overview");
+
+  useEffect(() => {
+    const sectionIds = ["overview", "districts", "compare", "profiles", "watchlist"];
+    const updateActiveSection = () => {
+      const current = sectionIds.reduce((active, id) => {
+        const section = document.getElementById(id);
+        return section && section.getBoundingClientRect().top <= 160 ? id : active;
+      }, "overview");
+      setActiveSection(current);
+    };
+    const initialHash = window.location.hash.slice(1);
+    if (sectionIds.includes(initialHash)) setActiveSection(initialHash);
+    window.addEventListener("scroll", updateActiveSection, { passive: true });
+    window.addEventListener("hashchange", updateActiveSection);
+    updateActiveSection();
+    return () => {
+      window.removeEventListener("scroll", updateActiveSection);
+      window.removeEventListener("hashchange", updateActiveSection);
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -288,11 +309,11 @@ export function SchoolDashboard() {
       <aside className="sidebar">
         <div className="brand"><span className="brand-mark">M</span><span>MDG <strong>School Lens</strong></span></div>
         <nav aria-label="Primary navigation">
-          <a className="active" href="#overview"><span>⌂</span> Overview</a>
-          <a href="#districts"><span>◇</span> District Explorer</a>
-          <a href="#compare"><span>⇄</span> School Comparison</a>
-          <a href="#profiles"><span>▤</span> School Profiles</a>
-          <a href="#watchlist"><span>☆</span> Watchlist <b className="nav-count">{watchlist.length}</b></a>
+          <a className={activeSection === "overview" ? "active" : ""} href="#overview" onClick={() => setActiveSection("overview")}><span>⌂</span> Overview</a>
+          <a className={activeSection === "districts" ? "active" : ""} href="#districts" onClick={() => setActiveSection("districts")}><span>◇</span> District Explorer</a>
+          <a className={activeSection === "compare" ? "active" : ""} href="#compare" onClick={() => setActiveSection("compare")}><span>⇄</span> School Comparison</a>
+          <a className={activeSection === "profiles" ? "active" : ""} href="#profiles" onClick={() => setActiveSection("profiles")}><span>▤</span> School Profiles</a>
+          <a className={activeSection === "watchlist" ? "active" : ""} href="#watchlist" onClick={() => setActiveSection("watchlist")}><span>☆</span> Watchlist <b className="nav-count">{watchlist.length}</b></a>
         </nav>
         <div className="sidebar-bottom">
           <a href="#health"><span>◎</span> Data Health</a>
@@ -301,8 +322,8 @@ export function SchoolDashboard() {
         </div>
       </aside>
 
-      <main className="main" id="overview">
-        <header className="topbar">
+      <main className="main">
+        <header className="topbar" id="overview">
           <div><p className="eyebrow">Executive overview</p><h1>School system pulse</h1></div>
           <div className="controls">
             <label>Reporting year
