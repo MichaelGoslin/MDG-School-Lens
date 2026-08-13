@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://mdg-school-lens.michael-goslin.chatgpt.site"),
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"),
   title: "MDG School Lens | NYC School Quality Intelligence",
   description: "An executive view of NYC School Quality Reports for education administrators.",
   openGraph: {
